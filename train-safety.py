@@ -116,7 +116,8 @@ args['obstacles'] = True
 args['road'] = True
 args['vehicles'] = True
 args['list'] = 4
-args['resume_path'] = None
+args['resume_path'] = '/datasets/home/44/344/abkandoi/trajectory_prediction_INFER/ablation_cache/skipLSTM/split-0'
+args['resume'] = False  #bool
 
 
 # HYPERPARAMETERS
@@ -169,11 +170,20 @@ model, isLSTM = loadModel(args['modelType'], args['imageWidth'], args['imageHeig
                           args['activation'], args['initType'], len(channels) + 1,
                           args['batchnorm'], args['dilation'])
 
+if args['resume']:
+    print('TRAINING TO BE RESUMED!')
+    print('Loading checkpoint.tar')
+    checkpoint = torch.load(os.path.join(args['resume_path'], 'checkpoint.tar'))
+    model.load_state_dict(checkpoint['model_state_dict'])
+    lastEpoch = checkpoint['epoch']
+    print('lastEpoch is {}'.format(lastEpoch))
+    print('will resume training from epoch {}'.format(lastEpoch+1))
+
 model = model.cuda()
 # Make Directory Structure to Save the Models:
 baseDir = '/datasets/home/44/344/abkandoi/trajectory_prediction_INFER'
 print('baseDir is {}'.format(baseDir))
-expDir = os.path.join(baseDir, 'ablation_cache', args['modelType'], time.strftime("%d_%m_%Y_%H_%M"), args['expID'])
+expDir = os.path.join(baseDir, 'ablation_cache', args['modelType'], args['expID'])
 print('expDir is {}'.format(expDir))
 lossDir = os.path.join(expDir, 'loss')
 os.makedirs(expDir, exist_ok=True)
@@ -199,6 +209,10 @@ elif args['optMethod'] == 'amsgrad':
     optimizer = optim.Adam(model.parameters(), lr=args['lr'], betas=(args['beta1'], args['beta2']), weight_decay=args['weightDecay'],
                            amsgrad=True)
 
+
+if args['resume']:
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    print('Loaded optimizer state dictionary')
 
 # Default CUDA tensor
 torch.set_default_tensor_type(torch.cuda.FloatTensor)
@@ -230,6 +244,12 @@ valDataset = KittiDataset(args['dataDir'], height=args['imageHeight'], width=arg
 epochTrainLoss = []
 epochValidLoss = []
 
+if args['resume']:
+    epochTrainLoss = checkpoint['train_loss']
+    epochValidLoss = checkpoint['valid_loss']
+    print('Loaded epochTrainLoss and epochValidLoss')
+
+
 # Saving Model Weights
 best_model_weights = copy.deepcopy(model.state_dict())
 best_loss = 100000000
@@ -238,16 +258,25 @@ best_loss = 100000000
 best_model_weights_future = copy.deepcopy(model.state_dict())
 best_loss_future = 100000000
 
+if args['resume']:
+    print('Loading checkpoint_best.tar')
+    checkpoint_best = torch.load(os.path.join(args['resume_path'], 'checkpoint_best.tar'))
+    best_loss = checkpoint_best['valid_loss'][-1]
+    # update best_loss_future if checkpoint for it exists
+    if lastEpoch > int(args['futureEpochs']):
+        print('Loading checkpoint_future_best.tar')
+        checkpoint_future_best = torch.load(os.path.join(args['resume_path'], 'checkpoint_future_best.tar'))
+        best_loss_future = checkpoint_future_best['valid_loss'][-1]
+
+
 # Loss History
 lossHistory = []
 
-# Train Loss History
-trainHistory = []
+epochRange = range(args['nepochs'])
+if args['resume']:
+    epochRange = range(lastEpoch + 1, args['nepochs'])
 
-# Validation History
-validationHistory = []
-
-for epoch in range(args['nepochs']):
+for epoch in epochRange:
     print("-" * 100)
     print("Epoch No: {}".format(epoch))
     startTime = time.time()
@@ -410,7 +439,6 @@ for epoch in range(args['nepochs']):
             print("Grad: ", param.grad.data.norm(2.))
 
     epochTrainLoss.append(np.mean(trainLossPerEpoch))
-    trainHistory.append([epoch, epochTrainLoss[-1]])
 
     # Validation
     startTime = time.time()
@@ -469,22 +497,44 @@ for epoch in range(args['nepochs']):
     avgValidLoss = np.mean(validLossPerEpoch)
     print("Average valid loss: ", avgValidLoss)
     epochValidLoss.append(avgValidLoss)
-    validationHistory.append([epoch, epochValidLoss[-1]])
 
+    # best model checkpoint
     if avgValidLoss < best_loss:
         best_loss = avgValidLoss
-        best_model_weights = copy.deepcopy(model.state_dict())
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "train_loss": epochTrainLoss[-1],
-            "valid_loss": best_loss
+            "train_loss": epochTrainLoss,
+            "valid_loss": epochValidLoss
         }
-        torch.save(checkpoint, os.path.join(expDir, 'checkpoint.tar'))
-        torch.save(model, os.path.join(expDir, 'model.pth'))
+        torch.save(checkpoint, os.path.join(expDir, 'checkpoint_best.tar'))
+        torch.save(model, os.path.join(expDir, 'model_best.pth'))
+
+    # checkpoint every epoch
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "train_loss": epochTrainLoss,
+        "valid_loss": epochValidLoss
+    }
+    torch.save(checkpoint, os.path.join(expDir, 'checkpoint.tar'))
+    torch.save(model, os.path.join(expDir, 'model.pth'))
+
+    print('CHECKPOINT: saved to {}'.format(os.path.join(expDir, 'checkpoint.tar')))
 
     if epoch > int(args['futureEpochs']):
+        checkpoint_future = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "train_loss": epochTrainLoss,
+            "valid_loss": epochValidLoss
+        }
+        torch.save(checkpoint_future, os.path.join(expDir, 'checkpoint_future.tar'))
+        torch.save(model, os.path.join(expDir, 'model_future.pth'))
+
         if avgValidLoss < best_loss_future:
             best_loss_future = avgValidLoss
             best_model_weights_future = copy.deepcopy(model.state_dict())
@@ -492,11 +542,11 @@ for epoch in range(args['nepochs']):
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "train_loss": epochTrainLoss[-1],
-                "valid_loss": best_loss_future
+                "train_loss": epochTrainLoss,
+                "valid_loss": epochValidLoss
             }
-            torch.save(checkpoint_future, os.path.join(expDir, 'checkpoint_future.tar'))
-            torch.save(model, os.path.join(expDir, 'model_future.pth'))
+            torch.save(checkpoint_future, os.path.join(expDir, 'checkpoint_future_best.tar'))
+            torch.save(model, os.path.join(expDir, 'model_future_best.pth'))
 
     print("For Validation: --- %s seconds ---" % (time.time() - startTime))
 

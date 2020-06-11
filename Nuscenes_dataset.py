@@ -23,9 +23,9 @@ class NuscenesDataset(Dataset):
         
         # Length of dataset
         if self.train:
-            self.len = 28*60*12
+            self.len = 26*10*12
         else:
-            self.len = 28*15*12
+            self.len = 26*2*12
 
     def __len__(self):
         return self.len
@@ -34,11 +34,11 @@ class NuscenesDataset(Dataset):
     def __getitem__(self, idx):
         # Get the kitti sequence no
         if self.train:
-            sceneNum = np.floor(idx/(28*12))
-            seqNum = np.floor(idx / 12) - sceneNum*28
+            sceneNum = np.floor(idx/(26*12))
+            seqNum = np.floor(idx / 12) - sceneNum*26
         else:
-            sceneNum = np.floor(idx/(28*12)) + 60
-            seqNum = np.floor(idx / 12) - (sceneNum-60)*28
+            sceneNum = np.floor(idx/(26*12)) + 10
+            seqNum = np.floor(idx / 12) - (sceneNum-10)*26
         
         numFrames = 12
         # Get the Current frame

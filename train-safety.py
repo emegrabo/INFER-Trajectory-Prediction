@@ -11,10 +11,11 @@ import torch.optim as optim
 import csv
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt 
 
 from torch.autograd import Variable
-from KittiDataset import KittiDataset
+import torch.utils.data as data_utils
+from Nuscenes_dataset import NuscenesDataset
 
 
 def obstacleLossFun(outputBatch, obstacleBatch):
@@ -109,14 +110,14 @@ args['imageWidth'] = 256
 args['imageHeight'] = 256
 args['modelType'] = "skipLSTM"
 args['dilation'] = True # for convolution
-args['lossOT'] = True # safety loss
+args['lossOT'] = False # safety loss
 args['usePrev'] = False # Use previous prediction to predict next, in LSTM
 args['lane'] = True
 args['obstacles'] = True
 args['road'] = True
 args['vehicles'] = True
 args['list'] = 4
-args['resume_path'] = '/datasets/home/44/344/abkandoi/trajectory_prediction_INFER/ablation_cache/skipLSTM/split-0'
+args['resume_path'] = '/home/sas115/trajectory_prediction_INFER-master/ablation_cache/skipLSTM/split-0'
 args['resume'] = False  #bool
 
 
@@ -137,37 +138,19 @@ args['scaleFactor'] = False
 args['softmax'] = False
 args['gamma'] = 0.0
 args['futureEpochs'] = 10.0
-args['futureFrames'] = 20.0
+args['futureFrames'] = 4
 args['scheduledSampling'] = False
 args['minMaxNorm'] = False
 args['lambda1'] = 1.0
 
 
 # DATASET
-args['dataDir'] = '/datasets/home/44/344/abkandoi/trajectory_prediction_INFER/INFER-datasets/kitti'
-args['augmentation'] = False
-args['augmentationProb'] = 0.3
+args['dataDir'] = '/home/sas115/trajectory_prediction_INFER-master/nuScenes_project_dataset'
 args['groundTruth'] = True
-args['csvDir'] = '/datasets/home/44/344/abkandoi/trajectory_prediction_INFER/INFER-datasets/kitti/final-validation'
-args['trainPath'] = 'train0.csv'
-args['valPath'] = 'test0.csv'
 args['expID'] = 'split-0'
 
-channels = []
-if args['lane'] != "False":
-    channels.append("lane")
-if args['obstacles'] != "False":
-    channels.append("obstacles")
-if args['road'] != "False":
-    channels.append("road")
-if args['vehicles'] != "False":
-    channels.append("vehicles")
-args['channels'] = channels
-
-print("Channels Used: ", channels)
-
 model, isLSTM = loadModel(args['modelType'], args['imageWidth'], args['imageHeight'],
-                          args['activation'], args['initType'], len(channels) + 1,
+                          args['activation'], args['initType'], 5,
                           args['batchnorm'], args['dilation'])
 
 if args['resume']:
@@ -181,7 +164,7 @@ if args['resume']:
 
 model = model.cuda()
 # Make Directory Structure to Save the Models:
-baseDir = '/datasets/home/44/344/abkandoi/trajectory_prediction_INFER'
+baseDir = '/home/sas115/trajectory_prediction_INFER-master'
 print('baseDir is {}'.format(baseDir))
 expDir = os.path.join(baseDir, 'ablation_cache', args['modelType'], args['expID'])
 print('expDir is {}'.format(expDir))
@@ -217,29 +200,8 @@ if args['resume']:
 # Default CUDA tensor
 torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
-# Scale factor to scale the label channel
-scf = 1
-if args['scaleFactor']:
-    scf = args['imageHeight'] * args['imageWidth']
-
-if args['csvDir'] is None:
-    args['csvDir'] = args['dataDir']
-
-print("-" * 100)
-print("scf is {}".format(scf))
-print("Loss: ", args['lossFun'])
-print("Data Dir: ", args['dataDir'])
-print("CSV Dir: ", args['csvDir'])
-
-trainInfoPath = os.path.join(args['csvDir'], args['trainPath'])
-trainDataset = KittiDataset(args['dataDir'], height=args['imageHeight'], width=args['imageWidth'], train=True,
-                            infoPath=trainInfoPath, augmentation=args['augmentation'],
-                            augmentationProb=args['augmentationProb'], channels=args['channels'],
-                            groundTruth=args['groundTruth'])
-
-valInfoPath = os.path.join(args['csvDir'], args['valPath'])
-valDataset = KittiDataset(args['dataDir'], height=args['imageHeight'], width=args['imageWidth'], train=False,
-                          infoPath=valInfoPath, channels=args['channels'], groundTruth=args['groundTruth'])
+trainDataset = NuscenesDataset(args['dataDir'], height=args['imageHeight'], width=args['imageWidth'], train=True)
+valDataset = NuscenesDataset(args['dataDir'], height=args['imageHeight'], width=args['imageWidth'], train=False)
 
 epochTrainLoss = []
 epochValidLoss = []
@@ -268,6 +230,7 @@ if args['resume']:
         checkpoint_future_best = torch.load(os.path.join(args['resume_path'], 'checkpoint_future_best.tar'))
         best_loss_future = checkpoint_future_best['valid_loss'][-1]
 
+scf = 1
 
 # Loss History
 lossHistory = []
@@ -309,7 +272,9 @@ for epoch in epochRange:
             # First pair to be forwarded, hence zero grad
             model.zero_grad()
 
-        grid, kittiSeqNum, vehicleId, frame1, frame2, endOfSequence, offset, numFrames, augmentation = trainDataset[i]
+        grid, sceneNum, seqNum, frame_num, endOfSequence = trainDataset[i]
+        grid = grid.type(torch.cuda.FloatTensor)
+
 
         # The Last Channel is the target frame and first n - 1 are source frames
         inp = grid[:-1, :].unsqueeze(0).cuda()
@@ -329,12 +294,21 @@ for epoch in epochRange:
             obstacleBatch = torch.cat((obstacleBatch, grid[2, :].unsqueeze(0).cuda()), 0)
 
         # Pass the future predictions after pre-conditioning the LSTM
-        if offset >= int(args['futureFrames']) and epoch > int(args['futureEpochs']):
+        if frame_num < args['futureFrames']:
+            prevChannels = inp
+            
+        if frame_num >= int(args['futureFrames']):
             new_inp = inp.clone().squeeze(0)
             if args['minMaxNorm']:
                 mn, mx = torch.min(prevOut), torch.max(prevOut)
                 prevOut = (prevOut - mn) / (mx - mn)
-            new_inp[0] = prevOut
+            if epoch > int(args['futureEpochs']):
+                new_inp[0] = prevOut
+            new_inp[1] = prevChannels[0, 1, :, :]
+            new_inp[2] = prevChannels[0, 2, :, :]
+            new_inp[3] = prevChannels[0, 3, :, :]
+            new_inp[4] = prevChannels[0, 4, :, :]
+            
             inp = new_inp.unsqueeze(0).cuda()
 
         if isLSTM:
@@ -365,7 +339,7 @@ for epoch in epochRange:
         currLabel = currLabel.detach().cpu().numpy().squeeze(0).squeeze(0)
         _, dist, predCoordinates = heatmapAccuracy(currOutputMap, currLabel)
 
-        if offset >= int(args['futureFrames']):
+        if frame_num >= int(args['futureFrames']):
             seqLoss.append(dist)
 
         if count == args['seqLen'] or endOfSequence is True:
@@ -418,11 +392,10 @@ for epoch in epochRange:
             count = 0
 
             if endOfSequence is True:
-                if numFrames >= 60:
-                    trainLossPerEpoch.append(np.mean(seqLoss))
-                    print("kittiSeq: {}, vehicleId: {}, trainSeqNo: {}, numFrames: {}, Augmentation: {}, Seq Loss: {}".format(
-                        kittiSeqNum, vehicleId, curSeqNum, numFrames, augmentation, np.mean(seqLoss)))
-                    lossHistory.append(["Training", kittiSeqNum, vehicleId, curSeqNum, augmentation, np.mean(seqLoss)])
+                trainLossPerEpoch.append(np.mean(seqLoss))
+                print("Scene: {}, Sequence: {}, Frame: {}, Seq Loss: {}".format(
+                    sceneNum, seqNum, frame_num, np.mean(seqLoss)))
+                lossHistory.append(["Training", sceneNum, seqNum, frame_num, np.mean(seqLoss)])
 
                 curSeqNum += 1
                 if isLSTM:
@@ -447,13 +420,14 @@ for epoch in epochRange:
     seqLoss = []
     curSeqNum = 0
     for i in range(len(valDataset)):
-        grid, kittiSeqNum, vehicleId, frame1, frame2, endOfSequence, offset, numFrames, augmentation = valDataset[i]
+        grid, sceneNum, seqNum, frame_num, endOfSequence = valDataset[i]
+        grid = grid.type(torch.cuda.FloatTensor)
 
         # The Last Channel is the target frame and first n - 1 are source frames
         inp = grid[:-1, :].unsqueeze(0).cuda()
         label = grid[-1:, :].unsqueeze(0).cuda()
 
-        if offset >= int(args['futureFrames']) and epoch > int(args['futureEpochs']):
+        if frame_num >= int(args['futureFrames']) and epoch > int(args['futureEpochs']):
             new_inp = inp.clone()
             new_inp = new_inp.squeeze(0)
             if args['minMaxNorm']:
@@ -480,17 +454,16 @@ for epoch in epochRange:
         labelMap = label.detach().cpu().numpy().squeeze(0).squeeze(0)
         _, dist, predCoordinates = heatmapAccuracy(outputMap, labelMap)
 
-        if offset >= int(args['futureFrames']):
+        if frame_num >= int(args['futureFrames']):
             seqLoss.append(dist)
 
         if endOfSequence:
             state = None
-            if offset >= int(args['futureFrames']):
-                if numFrames >= 60:
-                    validLossPerEpoch.append(np.mean(seqLoss))
-                    print("kittiSeq: {}, vehicleId: {}, valSeqNo: {}, numFrames: {}, Augmentation: {}, Seq Loss: {}".format(
-                        kittiSeqNum, vehicleId, curSeqNum, numFrames, augmentation, np.mean(seqLoss)))
-                    lossHistory.append(["Validation", kittiSeqNum, vehicleId, curSeqNum, augmentation, np.mean(seqLoss)])
+            if frame_num >= int(args['futureFrames']):
+                validLossPerEpoch.append(np.mean(seqLoss))
+                print("Scene: {}, Sequence: {}, Frame: {}, Seq Loss: {}".format(
+                    sceneNum, seqNum, frame_num, np.mean(seqLoss)))
+                lossHistory.append(["Validation", sceneNum, seqNum, frame_num, np.mean(seqLoss)])
             seqLoss = []
             curSeqNum += 1
 

@@ -11,34 +11,23 @@ from PIL import Image
 from torchvision import transforms
 
 
-class NuscenesDataset(Dataset):
-    def __init__(self, NuscenesBaseDir, height=256, width=256, train=True):
+class NuscenesDatasetTest(Dataset):
+    def __init__(self, NuscenesBaseDir, height=256, width=256):
         # path to main dataset
         self.baseDir = NuscenesBaseDir
 
         self.height, self.width = height, width
-
-        # train = True if train dataset, else train = False
-        self.train = train
         
         # Length of dataset
-        if self.train:
-            self.len = 26*35*12
-        else:
-            self.len = 26*9*12
+        self.len = 26*9*12
 
     def __len__(self):
         return self.len
 
 
     def __getitem__(self, idx):
-        # Get the kitti sequence no
-        if self.train:
-            sceneNum = np.floor(idx/(26*12))
-            seqNum = np.floor(idx / 12) - sceneNum*26
-        else:
-            sceneNum = np.floor(idx/(26*12)) + 35
-            seqNum = np.floor(idx / 12) - (sceneNum-35)*26
+        sceneNum = np.floor(idx/(26*12)) + 35
+        seqNum = np.floor(idx / 12) - (sceneNum-35)*26
         
         numFrames = 12
         # Get the Current frame

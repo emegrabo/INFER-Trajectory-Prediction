@@ -117,7 +117,7 @@ args['obstacles'] = True
 args['road'] = True
 args['vehicles'] = True
 args['list'] = 4
-args['resume_path'] = '/home/sas115/trajectory_prediction_INFER-master/ablation_cache/skipLSTM/split-0'
+args['resume_path'] = '/home/sas115/trajectory_prediction_INFER-master/ablation_cache_nuscenes/skipLSTM/split-0'
 args['resume'] = False  #bool
 
 
@@ -126,7 +126,7 @@ args['lr'] = 0.000100
 args['momentum'] = 0.900000
 args['weightDecay'] = 0.0
 args['lrDecay'] = 0.0
-args['nepochs'] = 60
+args['nepochs'] = 20
 args['beta1'] = 0.90000
 args['beta2'] = 0.999
 args['gradClip'] = 10.0
@@ -166,7 +166,7 @@ model = model.cuda()
 # Make Directory Structure to Save the Models:
 baseDir = '/home/sas115/trajectory_prediction_INFER-master'
 print('baseDir is {}'.format(baseDir))
-expDir = os.path.join(baseDir, 'ablation_cache', args['modelType'], args['expID'])
+expDir = os.path.join(baseDir, 'ablation_cache_nuscenes', args['modelType'], args['expID'])
 print('expDir is {}'.format(expDir))
 lossDir = os.path.join(expDir, 'loss')
 os.makedirs(expDir, exist_ok=True)
@@ -426,14 +426,23 @@ for epoch in epochRange:
         # The Last Channel is the target frame and first n - 1 are source frames
         inp = grid[:-1, :].unsqueeze(0).cuda()
         label = grid[-1:, :].unsqueeze(0).cuda()
+        
+        if frame_num < args['futureFrames']:
+            prevChannels = inp
 
-        if frame_num >= int(args['futureFrames']) and epoch > int(args['futureEpochs']):
+        if frame_num >= int(args['futureFrames']):
             new_inp = inp.clone()
             new_inp = new_inp.squeeze(0)
             if args['minMaxNorm']:
                 mn, mx = torch.min(prevOut), torch.max(prevOut)
                 prevOut = (prevOut - mn) / (mx - mn)
-            new_inp[0] = prevOut
+            if epoch > int(args['futureEpochs']):
+                new_inp[0] = prevOut
+            new_inp[1] = prevChannels[0, 1, :, :]
+            new_inp[2] = prevChannels[0, 2, :, :]
+            new_inp[3] = prevChannels[0, 3, :, :]
+            new_inp[4] = prevChannels[0, 4, :, :]
+            
             inp = new_inp.unsqueeze(0).cuda()
 
         if isLSTM:
@@ -523,7 +532,7 @@ for epoch in epochRange:
 
     print("For Validation: --- %s seconds ---" % (time.time() - startTime))
 
-    if epoch % 5 == 0:
+    if epoch % 1 == 0:
         fig, ax = plt.subplots(1)
         ax.plot(range(len(epochTrainLoss)), epochTrainLoss, 'r', label='Train Loss')
         ax.plot(range(len(epochValidLoss)), epochValidLoss, 'g', label='Valid Loss')

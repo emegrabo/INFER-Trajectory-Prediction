@@ -26,8 +26,8 @@ class NuscenesDatasetTest(Dataset):
 
 
     def __getitem__(self, idx):
-        sceneNum = np.floor(idx/(26*12)) + 35
-        seqNum = np.floor(idx / 12) - (sceneNum-35)*26
+        sceneNum = np.floor(idx/(26*12)) + 44
+        seqNum = np.floor(idx / 12) - (sceneNum-44)*26
         
         numFrames = 12
         # Get the Current frame
